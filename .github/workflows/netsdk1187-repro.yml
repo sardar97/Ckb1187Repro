@@ -1,0 +1,41 @@
+name: NETSDK1187 ckb repro
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  repro:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-icu, os: windows-latest, usenls: "" }
+          - { name: windows-nls, os: windows-latest, usenls: "1" }
+          - { name: ubuntu, os: ubuntu-latest, usenls: "" }
+          - { name: macos, os: macos-latest, usenls: "" }
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_SYSTEM_GLOBALIZATION_USENLS: ${{ matrix.usenls }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - run: dotnet --info
+
+      # Expect NETSDK1187 x2 on Windows, 0 warnings elsewhere
+      - name: Build the Blazor app
+        run: dotnet build Ckb1187Repro.csproj --no-incremental
+
+      # Same build, but Kurdish filtered out before the SDK ever normalizes it
+      - name: Build with SatelliteResourceLanguages=de
+        run: dotnet build Ckb1187Repro.csproj --no-incremental -p:SatelliteResourceLanguages=de
+
+      # Shows CultureInfo names, output folder names, and whether the ckb satellite is found at runtime
+      - name: Run culture probe
+        run: dotnet run --project .github/probe/Probe.csproj
