@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+env:
+  DOTNET_NOLOGO: "1"
+
 jobs:
   repro:
     name: ${{ matrix.name }}
@@ -12,30 +15,61 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: windows-icu, os: windows-latest, usenls: "" }
-          - { name: windows-nls, os: windows-latest, usenls: "1" }
-          - { name: ubuntu, os: ubuntu-latest, usenls: "" }
-          - { name: macos, os: macos-latest, usenls: "" }
-    env:
-      DOTNET_NOLOGO: "1"
-      DOTNET_SYSTEM_GLOBALIZATION_USENLS: ${{ matrix.usenls }}
+          # build_nls / run_nls: "1" forces the legacy Windows NLS culture data, "" is the default (ICU)
+          - { name: windows-icu, os: windows-latest, build_nls: "", run_nls: "" }
+          - { name: windows-nls, os: windows-latest, build_nls: "1", run_nls: "1" }
+          # What Visual Studio does: the build sees NLS names, the app then runs on ICU
+          - { name: windows-nls-build-icu-run, os: windows-latest, build_nls: "1", run_nls: "" }
+          - { name: ubuntu, os: ubuntu-latest, build_nls: "", run_nls: "" }
+          - { name: macos, os: macos-latest, build_nls: "", run_nls: "" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
 
       - run: dotnet --info
 
-      # Expect NETSDK1187 x2 on Windows, 0 warnings elsewhere
+      # Expect NETSDK1187 x2 only when the build runs in NLS mode
       - name: Build the Blazor app
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_USENLS: ${{ matrix.build_nls }}
         run: dotnet build Ckb1187Repro.csproj --no-incremental
 
       # Same build, but Kurdish filtered out before the SDK ever normalizes it
       - name: Build with SatelliteResourceLanguages=de
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_USENLS: ${{ matrix.build_nls }}
         run: dotnet build Ckb1187Repro.csproj --no-incremental -p:SatelliteResourceLanguages=de
+
+      - name: Build culture probe
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_USENLS: ${{ matrix.build_nls }}
+        run: dotnet build .github/probe/Probe.csproj
 
       # Shows CultureInfo names, output folder names, and whether the ckb satellite is found at runtime
       - name: Run culture probe
-        run: dotnet run --project .github/probe/Probe.csproj
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_USENLS: ${{ matrix.run_nls }}
+        run: dotnet run --project .github/probe/Probe.csproj --no-build
+
+  # The real thing: Visual Studio's msbuild.exe (.NET Framework, always NLS), then run the app normally.
+  # May fail if the runner's Visual Studio is too old for the .NET 10 SDK - that would not invalidate the jobs above.
+  visual-studio-msbuild:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build culture probe with msbuild.exe
+        run: msbuild .github/probe/Probe.csproj -restore -v:m
+
+      - name: Run culture probe
+        run: dotnet run --project .github/probe/Probe.csproj --no-build
